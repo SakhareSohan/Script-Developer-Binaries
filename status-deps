@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "📡 Container system status:"
+container system status || container system info || echo "container system info not available"
+
+echo
+echo "📦 Running dev containers (if any):"
+container ls --filter "name=dev-redis" --filter "name=dev-rabbitmq" || echo "No dev containers running"
+
+echo
+for name in dev-redis dev-rabbitmq; do
+  if container inspect "$name" >/dev/null 2>&1; then
+    echo "Details for $name:"
+    ip=$(container inspect "$name" --format '{{.NetworkSettings.IPAddress}}' 2>/dev/null || echo "n/a")
+    ports=$(container inspect "$name" --format '{{range $p,$m := .NetworkSettings.Ports}}{{printf "%s -> %s " $p $m}}{{end}}' 2>/dev/null || echo "n/a")
+    echo "  Internal IP: $ip"
+    echo "  Ports: $ports"
+    echo ""
+  fi
+done
+

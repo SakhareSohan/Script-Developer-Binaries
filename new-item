@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Usage: new-item service user-service
+#        new-item project checkout-portal
+
+TYPE="$1"
+NAME="$2"
+BASE="$HOME/dev"
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: new-item <service|project> <name>"
+  exit 1
+fi
+
+if [[ "$TYPE" != "service" && "$TYPE" != "project" ]]; then
+  echo "Type must be 'service' or 'project'"
+  exit 1
+fi
+
+TYPE_DIR=$([[ "$TYPE" = "service" ]] && echo "services" || echo "projects")
+TARGET="$BASE/$TYPE_DIR/$NAME"
+
+mkdir -p "$TARGET"/{backend,frontend,fullstack,scripts,experiments,ai,infrastructure,learning,playground}
+
+echo "# $NAME ($TYPE)" > "$TARGET/README.md"
+
+cat > "$TARGET/.gitignore" <<GITIGNORE
+node_modules
+.env
+.DS_Store
+coverage
+dist
+GITIGNORE
+
+echo "Created $TARGET with standard layout"
+

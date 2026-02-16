@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# collect-logs
+# Usage:
+#   collect-logs            # collect everything
+#   collect-logs --containers
+#   collect-logs --apps
+#   collect-logs --deps
+#   collect-logs --crashes
+#   collect-logs --system
+#   collect-logs --scripts
+#
+# Logs are stored under: $HOME/dev/logs/<category>/<sub>/<timestamp>/
+
+BASE_LOG_DIR="$HOME/dev/logs"
+TS="$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$BASE_LOG_DIR"
+
+collect_deps_logs() {
+  dest="$BASE_LOG_DIR/deps/run-deps/$TS"
+  mkdir -p "$dest"
+  echo "Collecting run-deps script logs to $dest"
+
+  # copy any run-deps logs created by the script earlier
+  if ls "$HOME/dev/logs/run-deps-"*".log" >/dev/null 2>&1; then
+    cp -a "$HOME/dev/logs/run-deps-"*".log" "$dest/" 2>/dev/null || true
+  fi
+
+  # also capture output of current status commands
+  {
+    echo "=== container list ==="
+    container list 2>&1 || echo "container list: not available"
+    echo
+    echo "=== container system info ==="
+    container system info 2>&1 || echo "container system info: not available"
+  } > "$dest/run-deps-status-$TS.txt" 2>&1 || true
+}
+
+collect_vscode_logs() {
+  src="$HOME/Library/Application Support/Code/logs"
+  dest="$BASE_LOG_DIR/applications/vscode/$TS"
+  if [ -d "$src" ]; then
+    mkdir -p "$dest"
+    echo "Copying VS Code logs to $dest"
+    # copy recursively, preserve structure but avoid permission failures
+    cp -a "$src"/* "$dest/" 2>/dev/null || rsync -a --ignore-missing-args "$src/" "$dest/" 2>/dev/null || true
+  else
+    echo "VS Code logs not found at $src (skipping)"
+  fi
+}
+
+collect_container_logs() {
+  dest_base="$BASE_LOG_DIR/containers"
+  mkdir -p "$dest_base"
+  # get container list
+  if command -v container >/dev/null 2>&1; then
+    # list containers and extract names/ids; handle different list output by using 'container list'
+    container list 2>/dev/null | awk 'NR>1{print $1, $NF}' | while read -r id name; do
+      # name may be at a different column; fallback approach: parse line for last token
+      if [ -z "$name" ]; then
+        name="$(container list 2>/dev/null | tail -n +2 | awk '{print $NF}' | head -n1 || true)"
+      fi
+      # if name empty, skip
+      [ -z "$name" ] && continue
+      dest="$dest_base/$name/$TS"
+      mkdir -p "$dest"
+      echo "Saving logs for container '$name' -> $dest"
+      # container logs (stdout/stderr)
+      container logs "$name" > "$dest/container.log" 2>&1 || echo "container logs for $name not available" > "$dest/container.log"
+      # inspect output
+      container inspect "$name" > "$dest/inspect.json" 2>&1 || true
+    done
+  else
+    echo "'container' CLI not found; skipping container logs collection"
+  fi
+}
+
+collect_crash_reports() {
+  src="$HOME/Library/Logs/DiagnosticReports"
+  dest="$BASE_LOG_DIR/crashes/$TS"
+  mkdir -p "$dest"
+  if [ -d "$src" ]; then
+    echo "Copying crash reports to $dest (only recent files)"
+    # copy only recent files (last 30 days). adjust find as needed.
+    find "$src" -type f -mtime -30 -maxdepth 1 -print0 | xargs -0 -I{} cp -a {} "$dest/" 2>/dev/null || true
+  else
+    echo "No DiagnosticReports directory found (skipping)"
+  fi
+}
+
+collect_system_logs() {
+  dest="$BASE_LOG_DIR/system/$TS"
+  mkdir -p "$dest"
+  echo "Collecting container/system logs to $dest"
+  # macOS unified log for container/containerd (last 1 hour)
+  log show --predicate 'process == "container" OR process == "containerd" OR process == "containerd-shim"' --last 1h > "$dest/container-unified.log" 2>&1 || echo "no container unified logs or permission denied" > "$dest/container-unified.log"
+  # snapshot of ps and network state
+  ps aux > "$dest/ps-aux-$TS.txt" 2>&1
+  netstat -an > "$dest/netstat-$TS.txt" 2>&1 || ss -an > "$dest/ss-$TS.txt" 2>&1 || true
+}
+
+collect_script_output() {
+  dest="$BASE_LOG_DIR/scripts/$TS"
+  mkdir -p "$dest"
+  echo "Saving outputs of dev scripts into $dest"
+
+  # sample: run status-deps and save
+  if command -v status-deps >/dev/null 2>&1; then
+    status-deps > "$dest/status-deps-$TS.txt" 2>&1 || true
+  fi
+  if command -v run-deps >/dev/null 2>&1; then
+    run-deps --dry-run 2>&1 > "$dest/run-deps-dryrun-$TS.txt" || true
+  fi
+  # copy any script logs already in dev/logs
+  if ls "$HOME/dev/logs/"* >/dev/null 2>&1; then
+    mkdir -p "$dest/old" && cp -a "$HOME/dev/logs/"* "$dest/old/" 2>/dev/null || true
+  fi
+}
+
+usage() {
+  cat <<USG
+collect-logs  - collect useful development logs into $BASE_LOG_DIR in structured folders.
+
+Usage:
+  collect-logs [--all] [--containers] [--apps] [--deps] [--crashes] [--system] [--scripts]
+
+By default (no flags) it collects everything.
+USG
+}
+
+# parse args
+if [ "$#" -eq 0 ]; then
+  ACTIONS="all"
+else
+  ACTIONS="$*"
+fi
+
+if echo "$ACTIONS" | grep -qw "all"; then
+  collect_deps_logs
+  collect_vscode_logs
+  collect_container_logs
+  collect_crash_reports
+  collect_system_logs
+  collect_script_output
+  echo "Collect-logs: completed full collection into $BASE_LOG_DIR (timestamp: $TS)"
+  exit 0
+fi
+
+# selective
+echo "$ACTIONS" | grep -qw "containers" && collect_container_logs
+echo "$ACTIONS" | grep -qw "apps" && collect_vscode_logs
+echo "$ACTIONS" | grep -qw "deps" && collect_deps_logs
+echo "$ACTIONS" | grep -qw "crashes" && collect_crash_reports
+echo "$ACTIONS" | grep -qw "system" && collect_system_logs
+echo "$ACTIONS" | grep -qw "scripts" && collect_script_output
+
+echo "collect-logs: done (timestamp: $TS)"

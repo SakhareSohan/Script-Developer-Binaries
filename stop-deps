@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "🛑 Stopping and removing dev containers (if present)..."
+# stop & remove gracefully
+container rm -f dev-redis dev-rabbitmq 2>/dev/null || true
+echo "✨ Containers removed (if they existed)."
+
